@@ -177,3 +177,7 @@ prisma_binaries/
 .direnv/
 
 .archive/
+
+# pywikibot
+apicache/
+throttle.ctrl
