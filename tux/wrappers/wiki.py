@@ -1,10 +1,13 @@
 from typing import Any, ClassVar
 from urllib.parse import unquote, urlparse
 
+import httpx
 import pywikibot  # type: ignore
 from loguru import logger
 from pywikibot import Family, Site, _BaseSite, config  # type: ignore
-from pywikibot.family import Family as BaseFamily  # type: ignore
+from pywikibot.family import Family as BaseFamily
+
+from tux.database.controllers.wiki import WikiBlockItemController, WikiController  # type: ignore
 
 
 def generate_wiki_family(
@@ -66,10 +69,10 @@ def generate_wiki_family(
             return "/w/api.php"  # Default API path for MediaWiki
 
     Family.__name__ = f"{fname.capitalize()}Family"
-    return Family  # type: ignore[return-value]
+    return Family  # type: ignore[return]
 
 
-def load_family(family_name: str) -> Family | None:
+def load_family(family_name: str) -> Family | None:  # type: ignore
     """
     Attempt to load a MediaWiki family by name.
 
@@ -90,7 +93,7 @@ def load_family(family_name: str) -> Family | None:
         return None
 
 
-def get_preregistered_wikis() -> list[Family]:
+def get_preregistered_wikis() -> list[BaseFamily]:  # type: ignore
     """
     Load all configured MediaWiki families from pywikibot config.
 
@@ -123,7 +126,7 @@ def search_wiki(site: _BaseSite, query: str) -> tuple[str, str] | None:  # type:
     or None if the page does not exist or an error occurs.
     """
     try:
-        page = pywikibot.Page(site, query)
+        page = pywikibot.Page(site, query)  # type: ignore
         if not page.exists():
             logger.info(f"Page '{query}' does not exist on '{site.family.name}'")  # type: ignore
             return None
@@ -133,7 +136,7 @@ def search_wiki(site: _BaseSite, query: str) -> tuple[str, str] | None:  # type:
         return None
 
 
-def query_wiki(search: str, family: Family) -> tuple[str, str]:
+def query_wiki(search: str, family: BaseFamily) -> tuple[str, str]:
     """
     Query a MediaWiki-compatible site for a search term.
 
@@ -160,16 +163,112 @@ def query_wiki(search: str, family: Family) -> tuple[str, str]:
     return result if result else ("No results", "N/A")
 
 
+async def is_wiki(code: str, family: BaseFamily) -> bool:
+    if code not in family.langs:
+        logger.debug(f"Code '{code}' not in family.langs.")
+        return False
+
+    site = Site(code, family)
+    api_url = f"{site.protocol()}://{site.hostname()}{site.apipath()}"  # type: ignore
+    params = {"action": "query", "meta": "siteinfo", "format": "json"}
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0, follow_redirects=True) as client:
+            response = await client.get(api_url, params=params)
+
+        if response.status_code != 200:
+            logger.warning(f"Non-200 response: {response.status_code} from {api_url}")
+            return False
+
+        data = response.json()
+        generator = data.get("query", {}).get("general", {}).get("generator", "")
+        return generator.startswith("MediaWiki")
+
+    except (httpx.RequestError, ValueError) as e:
+        logger.error(f"Error while checking site: {e}")
+        return False
+
+
 class WikiRegistry:
-    def __init__(self):
-        self._families: dict[str, BaseFamily] = {f.name: f for f in get_preregistered_wikis() if f.name is not None}
+    def __init__(self, guild_id: int):
+        self.db = WikiController(guild_id)
+        self.block_db = WikiBlockItemController(guild_id)
+        self.guild_id = guild_id
+        self._static_families: dict[str, BaseFamily] = {
+            f.name: f
+            for f in get_preregistered_wikis()
+            if f.name is not None  # type: ignore
+        }
 
-    def register(self, name: str, site: str, article_path: str | None = None, script_path: str | None = None):
-        family_cls = generate_wiki_family("en", site, name, article_path, script_path)
-        self._families[name] = family_cls()  # type: ignore[assignment]
+    async def _get_blocked_static_wikis(self) -> set[str]:
+        blocks = await self.block_db.get_all_blocks()
+        return {block.wiki_name for block in blocks}
 
-    def get(self, name: str) -> BaseFamily | None:
-        return self._families.get(name)
+    async def delete(self, name: str) -> bool:
+        name = name.lower()
+        if name in self._static_families:
+            logger.debug(f"Blocking static wiki: {name}")
+            await self.block_db.insert_blocked_wiki(name)
+            return True
 
-    def list(self) -> list[str]:
-        return list(self._families.keys())
+        guild_families = await self._get_guild_families()
+        if name in guild_families:
+            logger.debug(f"seleting dynamic wiki: {name}")
+            return await self.db.delete_wiki_by_name(name) is not None
+
+        logger.warning(f"Wiki '{name}' not found in registry.")
+        return False
+
+    async def register(
+        self,
+        name: str,
+        url: str,
+        article_path: str | None = None,
+        script_path: str | None = None,
+    ) -> bool:
+        try:
+            family_cls = generate_wiki_family("en", url, name, article_path, script_path)
+            is_valid = await is_wiki("en", family_cls())  # type: ignore
+            if is_valid:
+                await self.db.insert_wiki(
+                    name=name,
+                    url=url,
+                    article_path=article_path,
+                    script_path=script_path,
+                )
+            return is_valid
+        except Exception as e:
+            logger.error(f"Failed to register wiki '{name}': {e}")
+            return False
+
+    async def _get_guild_families(self) -> dict[str, BaseFamily]:
+        wikis = await self.db.get_wikis_by_guild_id()
+        return {
+            wiki.wiki_name: generate_wiki_family(
+                code="en",
+                site=wiki.wiki_url,
+                fname=wiki.wiki_name,
+                article_path=wiki.wiki_article_path,
+                script_path=wiki.wiki_script_path,
+            )()  # type: ignore
+            for wiki in wikis
+        }
+
+    async def get(self, name: str) -> BaseFamily | None:
+        blocked = await self._get_blocked_static_wikis()
+        if name in blocked:
+            return None
+
+        guild_families = await self._get_guild_families()
+        return guild_families.get(name) or self._static_families.get(name)
+
+    async def list(self) -> list[tuple[str, BaseFamily]]:
+        blocked = await self._get_blocked_static_wikis()
+        guild_families = await self._get_guild_families()
+
+        # Filter static families
+        filtered_static = {name: family for name, family in self._static_families.items() if name not in blocked}
+
+        # Merge with dynamic ones (guild_families take priority)
+        merged = {**filtered_static, **guild_families}
+        return list(merged.items())

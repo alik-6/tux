@@ -17,6 +17,8 @@ from prisma.models import (
     Snippet,
     Starboard,
     StarboardMessage,
+    Wiki,
+    WikiBlockItem,
 )
 from tux.database.client import db
 
@@ -32,6 +34,8 @@ ModelType = TypeVar(
     StarboardMessage,
     GuildConfig,
     AFKModel,
+    Wiki,
+    WikiBlockItem,
     Levels,
 )
 

@@ -11,6 +11,8 @@ model Guild {
   StarboardMessage StarboardMessage[]
   case_count       BigInt             @default(0)
   levels           Levels[]
+  wikis            Wiki[]
+  wiki_blocklist   WikiBlockItem[]
 
   @@index([guild_id])
 }
