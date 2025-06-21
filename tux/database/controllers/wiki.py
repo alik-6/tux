@@ -10,9 +10,6 @@ class WikiController(BaseController[Wiki]):
     """
 
     def __init__(self, guild_id: int) -> None:
-        """
-        Initialize the WikiController with a guild context.
-        """
         self.guild_id = guild_id
         super().__init__("wiki")
 
@@ -40,20 +37,24 @@ class WikiController(BaseController[Wiki]):
         url: str,
         script_path: str | None = None,
         article_path: str | None = None,
-    ) -> Wiki:
+    ) -> Wiki | None:
         """
         Insert a new Wiki entry for the current guild.
         """
-        return await self.create(
-            data={
-                "wiki_name": name,
-                "wiki_url": url,
-                "wiki_script_path": script_path,
-                "wiki_article_path": article_path,
-                "guild": self.connect_or_create_relation("guild_id", self.guild_id),
-            },
-            include={"guild": True},
-        )
+        wiki = await self.find_unique(where={"wiki_name_guild_id": {"wiki_name": name, "guild_id": self.guild_id}})
+
+        if wiki is None:
+            return await self.create(
+                data={
+                    "guild_id": self.guild_id,
+                    "wiki_name": name,
+                    "wiki_url": url,
+                    "wiki_script_path": script_path,
+                    "wiki_article_path": article_path,
+                },
+                include={"guild": True},
+            )
+        return None
 
     async def delete_wiki_by_id(self, wiki_id: int) -> Wiki | None:
         """
@@ -65,7 +66,7 @@ class WikiController(BaseController[Wiki]):
         """
         Delete a Wiki entry by name for the current guild.
         """
-        return await self.delete(where={"wiki_name": wiki_name, "guild_id": self.guild_id})
+        return await self.delete(where={"wiki_name_guild_id": {"wiki_name": wiki_name, "guild_id": self.guild_id}})
 
     async def update_wiki_by_id(
         self,
@@ -79,7 +80,6 @@ class WikiController(BaseController[Wiki]):
         Update a Wiki entry by ID.
         """
         data: dict[str, Any] = {}
-
         if name is not None:
             data["wiki_name"] = name
         if url is not None:
@@ -120,9 +120,6 @@ class WikiBlockItemController(BaseController[WikiBlockItem]):
     """
 
     def __init__(self, guild_id: int) -> None:
-        """
-        Initialize the WikiBlockItemController with a guild context.
-        """
         self.guild_id = guild_id
         super().__init__("wikiblockitem")
 
@@ -145,7 +142,7 @@ class WikiBlockItemController(BaseController[WikiBlockItem]):
         return await self.create(
             data={
                 "wiki_name": name,
-                "guild": self.connect_or_create_relation("guild_id", self.guild_id),
+                "guild_id": self.guild_id,
             },
             include={"guild": True},
         )
@@ -155,6 +152,12 @@ class WikiBlockItemController(BaseController[WikiBlockItem]):
         Delete a blocked Wiki entry by ID.
         """
         return await self.delete(where={"wiki_block_id": wiki_block_id})
+
+    async def delete_block_by_name(self, wiki_name: str) -> WikiBlockItem | None:
+        """
+        Delete a blocked Wiki entry by name for the current guild.
+        """
+        return await self.delete(where={"wiki_name_guild_id": {"wiki_name": wiki_name, "guild_id": self.guild_id}})
 
     async def update_block_by_id(
         self,

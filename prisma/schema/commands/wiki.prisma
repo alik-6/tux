@@ -7,16 +7,16 @@ model Wiki {
   guild_id          BigInt
   guild             Guild   @relation(fields: [guild_id], references: [guild_id])
 
-  @@unique([wiki_id, guild_id])
-  @@index([wiki_id, guild_id])
+  @@unique([wiki_name, guild_id])
+  @@index([wiki_id])
 }
 
 model WikiBlockItem {
-  wiki_block_id BigInt @id @default(autoincrement()) // Add this so multiple entries allowed
-  wiki_name     String // ← Block by name
+  wiki_block_id BigInt @id @default(autoincrement()) 
+  wiki_name     String 
   guild_id      BigInt
   guild         Guild  @relation(fields: [guild_id], references: [guild_id])
 
-  @@unique([wiki_name, guild_id]) // Important for lookup
-  @@index([wiki_name, guild_id])
+  @@unique([wiki_name, guild_id])
+  @@index([wiki_block_id])
 }

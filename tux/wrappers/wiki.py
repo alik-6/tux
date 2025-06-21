@@ -1,13 +1,34 @@
-from typing import Any, ClassVar
+from dataclasses import dataclass
+from enum import Enum
+from typing import Any, ClassVar, Generic, TypeVar
 from urllib.parse import unquote, urlparse
 
 import httpx
 import pywikibot  # type: ignore
 from loguru import logger
-from pywikibot import Family, Site, _BaseSite, config  # type: ignore
-from pywikibot.family import Family as BaseFamily
+from pywikibot import Family, Site, config  # type: ignore
+from pywikibot.family import Family as BaseFamily  # type: ignore
 
 from tux.database.controllers.wiki import WikiBlockItemController, WikiController  # type: ignore
+
+pywikibot.config.retry_attempts = 0  # type: ignore
+pywikibot.config.retry_wait = 0  # type: ignore
+pywikibot.config.max_retries = 0  # type: ignore
+T = TypeVar("T")
+
+
+class ResultStatus(Enum):
+    NOT_FOUND = 0
+    ALREADY_EXISTS = 1
+    DONE = 2
+    EXCEPTION = 3
+
+
+@dataclass
+class Result(Generic[T]):
+    data: T
+    status: ResultStatus
+    message: str
 
 
 def generate_wiki_family(
@@ -52,8 +73,10 @@ def generate_wiki_family(
     >>> family.apipath("en")
     '/api.php'
     """
+    if not site.startswith(("http://", "https://")):
+        site = f"https://{site}"
     parsed_site = urlparse(site)
-    hostname = parsed_site.netloc  # this gives 'wiki.archlinux.org'
+    hostname = parsed_site.netloc
 
     class Family(BaseFamily):
         name = fname
@@ -72,177 +95,328 @@ def generate_wiki_family(
     return Family  # type: ignore[return]
 
 
-def load_family(family_name: str) -> Family | None:  # type: ignore
+def load_family(family_name: str) -> Result[Family | None]:  # type: ignore
     """
     Attempt to load a MediaWiki family by name.
-
-    Parameters
-    ----------
-    family_name : str
-        The name of the MediaWiki family to load.
-
-    Returns
-    -------
-    Family or None
-        The loaded Family object if successful, otherwise None.
     """
     try:
-        return Family.load(family_name)  # type: ignore
+        family = Family.load(family_name)  # type: ignore
+        return Result(data=family, status=ResultStatus.DONE, message=f"Family '{family_name}' loaded successfully.")
     except Exception as e:
         logger.error(f"Failed to load family '{family_name}': {e}")
-        return None
+        return Result(data=None, status=ResultStatus.EXCEPTION, message=f"Failed to load family '{family_name}'.")
 
 
-def get_preregistered_wikis() -> list[BaseFamily]:  # type: ignore
+def get_preregistered_wikis() -> Result[list[BaseFamily]]:  # type: ignore
     """
     Load all configured MediaWiki families from pywikibot config.
-
-    Returns
-    -------
-    list of Family
-        A list of successfully loaded Family objects.
-    """
-    return [
-        fam
-        for name in config.family_files  # type: ignore
-        if (fam := load_family(name)) is not None  # type: ignore
-    ]
-
-
-def search_wiki(site: _BaseSite, query: str) -> tuple[str, str] | None:  # type: ignore
-    """
-    Try to get a page from a given wiki site by exact title.
-    Parameters
-    ----------
-    site : BaseSite
-        The MediaWiki site to query.
-    query : str
-        The exact page title.
-
-    Returns
-    -------
-    tuple of (str, str) or None
-    A tuple containing the title and URL of the page if it exists,
-    or None if the page does not exist or an error occurs.
     """
     try:
-        page = pywikibot.Page(site, query)  # type: ignore
-        if not page.exists():
+        families = []
+        for name in config.family_files:  # type: ignore
+            family_result = load_family(name)  # type: ignore
+            if family_result.status == ResultStatus.DONE and family_result.data:
+                families.append(family_result.data)  # type: ignore
+        return Result(
+            data=families,  # type: ignore
+            status=ResultStatus.DONE,
+            message=f"{len(families)} pre-registered wikis loaded.",  # type: ignore
+        )  # type: ignore
+    except Exception as e:
+        logger.error(f"Error loading pre-registered wikis: {e}")
+        return Result(data=[], status=ResultStatus.EXCEPTION, message="Failed to load pre-registered wikis.")
+
+
+def search_wiki(site: pywikibot.Site, query: str) -> Result[tuple[str, str] | None]:  # type: ignore
+    """
+    Search the wiki for a page by query (first match), and return its title and URL.
+    """
+    try:
+        search_results = site.search(query, total=1)  # type: ignore
+        page = next(search_results, None)  # type: ignore
+
+        if page is None or not page.exists():  # type: ignore
             logger.info(f"Page '{query}' does not exist on '{site.family.name}'")  # type: ignore
-            return None
-        return page.title(), unquote(page.full_url())  # type: ignore
+            return Result(data=None, status=ResultStatus.NOT_FOUND, message=f"Page '{query}' does not exist.")
+
+        return Result(
+            data=(page.title(), unquote(page.full_url())),  # type: ignore
+            status=ResultStatus.DONE,
+            message=unquote(page.full_url()),  # type: ignore
+        )
+
     except Exception as e:
         logger.error(f"Error retrieving page '{query}' on '{site.family.name}': {e}")  # type: ignore
-        return None
+        return Result(data=None, status=ResultStatus.EXCEPTION, message=f"Error retrieving page '{query}'.")
 
 
-def query_wiki(search: str, family: BaseFamily) -> tuple[str, str]:
+def query_wiki(search: str, family: BaseFamily) -> Result[tuple[str, str]]:
     """
     Query a MediaWiki-compatible site for a search term.
-
-    Parameters
-    ----------
-    search : str
-        The term to search for.
-    family : Family
-        The MediaWiki family object representing the site.
-
-    Returns
-    -------
-    tuple of (str, str)
-        A tuple containing the title and URL of the first result,
-        or fallback values if the search fails.
     """
     try:
         site = Site(code="en", fam=family)
     except Exception as e:
         logger.error(f"Site creation failed for family '{family.name}': {e}")
-        return "error", "Site initialization failed."
+        return Result(
+            data=("error", "Site initialization failed."),
+            status=ResultStatus.EXCEPTION,
+            message="Site initialization failed.",
+        )
 
-    result = search_wiki(site, search)
-    return result if result else ("No results", "N/A")
+    search_result = search_wiki(site, search)
+    if search_result.status == ResultStatus.DONE and search_result.data:
+        return Result(data=search_result.data, status=ResultStatus.DONE, message=search_result.message)
+    return Result(data=("No results", "N/A"), status=search_result.status, message=search_result.message)
 
 
-async def is_wiki(code: str, family: BaseFamily) -> bool:
+async def is_wiki(code: str, family: BaseFamily) -> Result[bool]:
+    result = Result(False, ResultStatus.EXCEPTION, "Unhandled error.")
+
     if code not in family.langs:
-        logger.debug(f"Code '{code}' not in family.langs.")
-        return False
+        msg = f"Code '{code}' not in family."
+        logger.debug(msg)
+        return Result(False, ResultStatus.NOT_FOUND, msg)
 
     site = Site(code, family)
     api_url = f"{site.protocol()}://{site.hostname()}{site.apipath()}"  # type: ignore
     params = {"action": "query", "meta": "siteinfo", "format": "json"}
 
     try:
-        async with httpx.AsyncClient(timeout=5.0, follow_redirects=True) as client:
+        transport = httpx.AsyncHTTPTransport(retries=0)
+        async with httpx.AsyncClient(timeout=5.0, follow_redirects=True, transport=transport) as client:
             response = await client.get(api_url, params=params)
 
-        if response.status_code != 200:
-            logger.warning(f"Non-200 response: {response.status_code} from {api_url}")
-            return False
+        if response.is_error:
+            msg = "Error response from server."
+            logger.error(msg)
+            result = Result(False, ResultStatus.EXCEPTION, msg)
 
-        data = response.json()
-        generator = data.get("query", {}).get("general", {}).get("generator", "")
-        return generator.startswith("MediaWiki")
+        else:
+            try:
+                data = response.json()
+                generator = data.get("query", {}).get("general", {}).get("generator", "")
+                is_mediawiki = generator.startswith("MediaWiki")
+                status = ResultStatus.DONE if is_mediawiki else ResultStatus.NOT_FOUND
+                msg = "Valid MediaWiki site." if is_mediawiki else "Site is not a MediaWiki installation."
+                result = Result(is_mediawiki, status, msg)
 
-    except (httpx.RequestError, ValueError) as e:
-        logger.error(f"Error while checking site: {e}")
-        return False
+            except ValueError:
+                msg = f"Non-JSON response from {code}:{family.name} at {api_url}"
+                logger.warning(msg)
+                result = Result(False, ResultStatus.NOT_FOUND, "Non-JSON response received.")
+
+    except httpx.HTTPStatusError as e:
+        status = ResultStatus.NOT_FOUND if e.response.status_code == 404 else ResultStatus.EXCEPTION
+        msg = (
+            f"{e.response.status_code} error at {e.request.url}."
+            if e.response.status_code == 404
+            else f"HTTP error: {e}"
+        )
+        logger.warning(msg) if status == ResultStatus.NOT_FOUND else logger.error(msg)
+        result = Result(False, status, msg)
+
+    except httpx.RequestError as e:
+        msg = f"Request error for {code}:{family.name}: {e}"
+        logger.error(msg)
+        result = Result(False, ResultStatus.EXCEPTION, msg)
+
+    except httpx.InvalidURL as e:
+        msg = f"Invalid URL:{api_url} {e}"
+        logger.error(msg)
+        result = Result(False, ResultStatus.EXCEPTION, msg)
+
+    except Exception as e:
+        msg = f"Unexpected error in is_wiki: {e}"
+        logger.error(msg)
+        result = Result(False, ResultStatus.EXCEPTION, "Unexpected error occurred.")
+
+    return result
 
 
-class WikiRegistry:
-    def __init__(self, guild_id: int):
-        self.db = WikiController(guild_id)
-        self.block_db = WikiBlockItemController(guild_id)
+D = TypeVar("D")
+
+
+class Registry(Generic[D]):
+    def __init__(self, guild_id: int, controller: D):
         self.guild_id = guild_id
-        self._static_families: dict[str, BaseFamily] = {
-            f.name: f
-            for f in get_preregistered_wikis()
-            if f.name is not None  # type: ignore
+        self.controller = controller
+        self.static_families: dict[str, BaseFamily] = {
+            f.name: f  # type: ignore
+            for f in get_preregistered_wikis().data
+            if f is not None and f.name is not None  # type: ignore
         }
 
-    async def _get_blocked_static_wikis(self) -> set[str]:
-        blocks = await self.block_db.get_all_blocks()
-        return {block.wiki_name for block in blocks}
 
-    async def delete(self, name: str) -> bool:
+class BlockRegistry(Registry[WikiBlockItemController]):
+    def __init__(self, guild_id: int):
+        super().__init__(guild_id, WikiBlockItemController(guild_id))
+
+    async def blocked_list(self) -> list[str]:
+        blocks = await self.controller.get_all_blocks()
+        return [block.wiki_name for block in blocks]
+
+    async def list(self) -> Result[dict[str, BaseFamily]]:
+        result = Result[dict[str, BaseFamily]](data={}, status=ResultStatus.EXCEPTION, message="")
+
+        try:
+            blocked = await self.blocked_list()
+
+            filtered_static = {name: family for name, family in self.static_families.items() if name in blocked}
+            result.data = filtered_static
+            result.status = ResultStatus.DONE
+
+            if len(result.data) == 0:
+                result.message = "No blocked wikis found."
+            elif len(result.data) == 1:
+                result.message = "1 blocked wiki found."
+            else:
+                result.message = f"{len(result.data)} blocked wikis found."
+
+        except Exception:
+            result.data = {}
+            result.status = ResultStatus.EXCEPTION
+            result.message = "An error occurred while retrieving the list of blocked wikis."
+
+        return result
+
+    async def unblock(self, name: str) -> Result[None]:
+        result = Result[None](data=None, status=ResultStatus.DONE, message="")
         name = name.lower()
-        if name in self._static_families:
-            logger.debug(f"Blocking static wiki: {name}")
-            await self.block_db.insert_blocked_wiki(name)
-            return True
 
-        guild_families = await self._get_guild_families()
-        if name in guild_families:
-            logger.debug(f"seleting dynamic wiki: {name}")
-            return await self.db.delete_wiki_by_name(name) is not None
+        try:
+            guild_blocked_families = await self.blocked_list()
 
-        logger.warning(f"Wiki '{name}' not found in registry.")
-        return False
+            if name in self.static_families:
+                block_exists = name in guild_blocked_families
+                if not block_exists:
+                    result.status = ResultStatus.NOT_FOUND
+                    result.message = f"Wiki '{name}' is not blocked."
+                else:
+                    await self.controller.delete_block_by_name(name)
+                    result.status = ResultStatus.DONE
+                    result.message = f"Wiki '{name}' has been unblocked successfully."
 
-    async def register(
+            else:
+                result.status = ResultStatus.NOT_FOUND
+                result.message = f"Wiki '{name}' does not exist."
+
+        except Exception:
+            result.status = ResultStatus.EXCEPTION
+            result.message = "An unexpected error occurred while trying to unblock the wiki."
+
+        return result
+
+    async def block(
+        self,
+        name: str,
+    ) -> Result[None]:
+        result = Result[None](data=None, status=ResultStatus.DONE, message="")
+        name = name.lower()
+
+        try:
+            guild_blocked_families = await self.blocked_list()
+
+            if name in self.static_families:
+                block_exists = name in guild_blocked_families
+                if block_exists:
+                    result.status = ResultStatus.ALREADY_EXISTS
+                    result.message = f"Wiki '{name}' is already blocked."
+                else:
+                    await self.controller.insert_blocked_wiki(name)
+                    result.status = ResultStatus.DONE
+                    result.message = f"Wiki '{name}' has been blocked successfully."
+
+            else:
+                result.status = ResultStatus.NOT_FOUND
+                result.message = f"Wiki '{name}' does not exist."
+
+        except Exception:
+            result.status = ResultStatus.EXCEPTION
+            result.message = "An unexpected error occurred while trying to block the wiki."
+
+        return result
+
+
+class WikiRegistry(Registry[WikiController]):
+    def __init__(self, guild_id: int):
+        super().__init__(guild_id, controller=WikiController(guild_id))
+
+    async def delete(self, name: str) -> Result[None]:
+        result = Result[None](data=None, status=ResultStatus.DONE, message="")
+        name = name.lower()
+
+        try:
+            guild_families = await self._get_guild_families()
+
+            if name in guild_families:
+                delete_result = await self.controller.delete_wiki_by_name(name)
+                if delete_result:
+                    result.status = ResultStatus.DONE
+                    result.message = f"Wiki '{name}' has been deleted."
+                else:
+                    result.status = ResultStatus.NOT_FOUND
+                    result.message = f"Wiki '{name}' was not found."
+
+            else:
+                result.status = ResultStatus.NOT_FOUND
+                result.message = f"Wiki '{name}' does not exist."
+
+        except Exception:
+            result.status = ResultStatus.EXCEPTION
+            result.message = "An unexpected error occurred while trying to delete the wiki."
+
+        return result
+
+    async def add(
         self,
         name: str,
         url: str,
         article_path: str | None = None,
         script_path: str | None = None,
-    ) -> bool:
+    ) -> Result[bool]:
+        result = Result[bool](data=False, status=ResultStatus.EXCEPTION, message="")
         try:
             family_cls = generate_wiki_family("en", url, name, article_path, script_path)
             is_valid = await is_wiki("en", family_cls())  # type: ignore
-            if is_valid:
-                await self.db.insert_wiki(
+
+            if is_valid.data and is_valid.status == ResultStatus.DONE:
+                is_inserted = await self.controller.insert_wiki(
                     name=name,
                     url=url,
                     article_path=article_path,
                     script_path=script_path,
                 )
-            return is_valid
+                if is_inserted:
+                    result.status = ResultStatus.DONE
+                    result.data = True
+                    result.message = f"Wiki '{name}' has been registered successfully."
+                else:
+                    result.message = f"Wiki {name} already exists."
+                    result.status = ResultStatus.ALREADY_EXISTS
+                    result.data = False
+                    return result
+            elif is_valid.status == ResultStatus.EXCEPTION:
+                return result
+            else:
+                result.status = ResultStatus.NOT_FOUND
+                result.data = False
+                result.message = f"The URL for wiki '{name}' is not valid or the wiki could not be reached."
+
         except Exception as e:
-            logger.error(f"Failed to register wiki '{name}': {e}")
-            return False
+            logger.error(e)
+            result.status = ResultStatus.EXCEPTION
+            result.data = False
+            result.message = "An error occurred while registering the wiki."
+
+        return result
+
+    async def guild_name_list(self) -> list[str]:
+        wikis = await self.controller.get_wikis_by_guild_id()
+        return [wiki.wiki_name for wiki in wikis]
 
     async def _get_guild_families(self) -> dict[str, BaseFamily]:
-        wikis = await self.db.get_wikis_by_guild_id()
+        wikis = await self.controller.get_wikis_by_guild_id()
         return {
             wiki.wiki_name: generate_wiki_family(
                 code="en",
@@ -254,21 +428,61 @@ class WikiRegistry:
             for wiki in wikis
         }
 
-    async def get(self, name: str) -> BaseFamily | None:
-        blocked = await self._get_blocked_static_wikis()
-        if name in blocked:
-            return None
+    async def _blocked_name_list(self) -> list[str]:
+        block_registry = BlockRegistry(self.guild_id)
+        return await block_registry.blocked_list()
 
-        guild_families = await self._get_guild_families()
-        return guild_families.get(name) or self._static_families.get(name)
+    async def get(self, name: str) -> Result[BaseFamily | None]:
+        result = Result[BaseFamily | None](data=None, status=ResultStatus.EXCEPTION, message="")
 
-    async def list(self) -> list[tuple[str, BaseFamily]]:
-        blocked = await self._get_blocked_static_wikis()
-        guild_families = await self._get_guild_families()
+        try:
+            blocked = await self._blocked_name_list()
+            if name in blocked:
+                result.status = ResultStatus.NOT_FOUND
+                result.data = None
+                result.message = f"Wiki '{name}' is currently blocked."
+                return result
 
-        # Filter static families
-        filtered_static = {name: family for name, family in self._static_families.items() if name not in blocked}
+            guild_families = await self._get_guild_families()
+            family = guild_families.get(name) or self.static_families.get(name)
 
-        # Merge with dynamic ones (guild_families take priority)
-        merged = {**filtered_static, **guild_families}
-        return list(merged.items())
+            if family:
+                result.status = ResultStatus.DONE
+                result.data = family
+                result.message = f"Wiki '{name}' found."
+            else:
+                result.status = ResultStatus.NOT_FOUND
+                result.data = None
+                result.message = f"Wiki '{name}' was not found."
+
+        except Exception:
+            result.status = ResultStatus.EXCEPTION
+            result.data = None
+            result.message = "An error occurred while retrieving the wiki."
+
+        return result
+
+    async def list(self) -> Result[dict[str, BaseFamily]]:
+        result = Result[dict[str, BaseFamily]](data={}, status=ResultStatus.EXCEPTION, message="")
+
+        try:
+            blocked = await self._blocked_name_list()
+            guild_families = await self._get_guild_families()
+
+            filtered_static = {name: family for name, family in self.static_families.items() if name not in blocked}
+            result.data = {**filtered_static, **guild_families}
+            result.status = ResultStatus.DONE
+
+            if len(result.data) == 0:
+                result.message = "No wikis found."
+            elif len(result.data) == 1:
+                result.message = "1 wiki found."
+            else:
+                result.message = f"{len(result.data)} wikis found."
+
+        except Exception:
+            result.data = {}
+            result.status = ResultStatus.EXCEPTION
+            result.message = "An error occurred while retrieving the list of wikis."
+
+        return result
