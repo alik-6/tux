@@ -31,7 +31,7 @@ class Wiki(commands.Cog):
     async def autocomplete_wiki_name(
         self, interaction: discord.Interaction, current: str
     ) -> list[app_commands.Choice[str]]:
-        registry = WikiRegistry(interaction.guild_id)  # type: ignore
+        registry = WikiRegistry(cast(int, interaction.guild_id))  
         result = await registry.list()
         result = Result(list(result.data.keys()), status=result.status, message=result.message)
         return await self.autocomplete_from_result(result=result, current=current)
@@ -39,14 +39,14 @@ class Wiki(commands.Cog):
     async def autocomplete_static_wiki_name(
         self, interaction: discord.Interaction, current: str
     ) -> list[app_commands.Choice[str]]:
-        registry = WikiRegistry(interaction.guild_id)  # type: ignore
+        registry = WikiRegistry(cast(int,interaction.guild_id))
         result = Result(list(registry.static_families), status=ResultStatus.DONE, message="")
         return await self.autocomplete_from_result(result=result, current=current)
 
     async def autocomplete_dynamic_wiki_name(
         self, interaction: discord.Interaction, current: str
     ) -> list[app_commands.Choice[str]]:
-        registry = WikiRegistry(interaction.guild_id)  # type: ignore
+        registry = WikiRegistry(cast(int,interaction.guild_id)) 
         result = Result(await registry.guild_name_list(), status=ResultStatus.DONE, message="")
         return await self.autocomplete_from_result(result=result, current=current)
 
@@ -136,8 +136,7 @@ class Wiki(commands.Cog):
         """List all registered wikis."""
         if ctx.interaction:
             await ctx.interaction.response.defer()
-
-        registry = WikiRegistry(ctx.guild.id)  # type: ignore
+        registry = WikiRegistry( ctx.guild.id) # type: ignore  
         wiki_list = await registry.list()
 
         if wiki_list.status == ResultStatus.DONE and wiki_list.data:
@@ -160,6 +159,8 @@ class Wiki(commands.Cog):
         """Search a registered wiki."""
         if ctx.interaction:
             await ctx.interaction.response.defer()
+        else:
+            await ctx.message.add_reaction('🐍')
 
         registry = WikiRegistry(ctx.guild.id)  # type: ignore
         result = await registry.get(name)
@@ -178,6 +179,8 @@ class Wiki(commands.Cog):
         else:
             embed = self.create_embed(result, ctx)
             await self.safe_send(ctx, embed=embed)
+        if (not ctx.interaction): await ctx.message.remove_reaction('🐍', ctx.guild.me)
+        
 
     @wiki.command(name="add")
     @checks.has_pl(2)
@@ -238,9 +241,6 @@ class Wiki(commands.Cog):
     @wiki.command(name="list_blocks")
     async def list_blocks(self, ctx: commands.Context[Tux]) -> None:
         """List all blocked wikis."""
-        if ctx.interaction:
-            await ctx.interaction.response.defer()
-
         registry = BlockRegistry(ctx.guild.id)  # type: ignore
         wiki_list = await registry.list()
 
@@ -257,6 +257,7 @@ class Wiki(commands.Cog):
 
         embed = self.create_embed(wiki_list, ctx)
         await self.safe_send(ctx, embed=embed)
+
 
 
 async def setup(bot: Tux) -> None:

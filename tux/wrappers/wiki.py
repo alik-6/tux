@@ -31,13 +31,13 @@ class Result(Generic[T]):
     message: str
 
 
-def generate_wiki_family(
+def wiki_factory(
     code: str,
     site: str,
-    fname: str,
+    name: str,
     article_path: str | None = None,
     script_path: str | None = None,
-) -> BaseFamily:
+) -> type[BaseFamily]:
     """
     Generate a custom Pywikibot Family subclass for a given MediaWiki site.
 
@@ -51,7 +51,7 @@ def generate_wiki_family(
         Language or project code (e.g., 'en').
     site : str
         Full URL of the target MediaWiki site (e.g., 'https://wiki.archlinux.org').
-    fname : str
+    name : str
         Internal family name used by Pywikibot (e.g., 'archwiki').
     article_path : str, optional
         The path pattern to articles, using `$1` as the placeholder (e.g., '/wiki/$1').
@@ -67,7 +67,7 @@ def generate_wiki_family(
     Examples
     --------
     >>> family_class = generate_wiki_family(
-    ...     code="en", site="https://wiki.archlinux.org", fname="archwiki", article_path="/title/$1", script_path="/"
+    ...     code="en", site="https://wiki.archlinux.org", name="archwiki", article_path="/title/$1", script_path="/"
     ... )
     >>> family = family_class()
     >>> family.apipath("en")
@@ -78,8 +78,9 @@ def generate_wiki_family(
     parsed_site = urlparse(site)
     hostname = parsed_site.netloc
 
+    fname: str = name
     class Family(BaseFamily):
-        name = fname
+        name: str | None = fname
         langs: ClassVar[dict[str, str]] = {code: hostname}  # type: ignore[assignment]
         articlepath: ClassVar[dict[str, str]] = {code: article_path or "/wiki/$1"}
 
@@ -91,20 +92,20 @@ def generate_wiki_family(
                 return f"{script_path.rstrip('/')}/api.php"
             return "/w/api.php"  # Default API path for MediaWiki
 
-    Family.__name__ = f"{fname.capitalize()}Family"
-    return Family  # type: ignore[return]
+    Family.__name__ = f"{name.capitalize()}Family"
+    return Family  
 
 
-def load_family(family_name: str) -> Result[Family | None]:  # type: ignore
+def load_family(name: str) -> Result[Family | None]: 
     """
     Attempt to load a MediaWiki family by name.
     """
     try:
-        family = Family.load(family_name)  # type: ignore
-        return Result(data=family, status=ResultStatus.DONE, message=f"Family '{family_name}' loaded successfully.")
+        family = Family.load(name)  
+        return Result(data=family, status=ResultStatus.DONE, message=f"Family '{name}' loaded successfully.")
     except Exception as e:
-        logger.error(f"Failed to load family '{family_name}': {e}")
-        return Result(data=None, status=ResultStatus.EXCEPTION, message=f"Failed to load family '{family_name}'.")
+        logger.error(f"Failed to load family '{name}': {e}")
+        return Result(data=None, status=ResultStatus.EXCEPTION, message=f"Failed to load family '{name}'.")
 
 
 def get_preregistered_wikis() -> Result[list[BaseFamily]]:  # type: ignore
@@ -135,7 +136,7 @@ def search_wiki(site: pywikibot.Site, query: str) -> Result[tuple[str, str] | No
         search_results = site.search(query, total=1)  # type: ignore
         page = next(search_results, None)  # type: ignore
 
-        if page is None or not page.exists():  # type: ignore
+        if page is None or not page.exists(): # type: ignore
             logger.info(f"Page '{query}' does not exist on '{site.family.name}'")  # type: ignore
             return Result(data=None, status=ResultStatus.NOT_FOUND, message=f"Page '{query}' does not exist.")
 
@@ -253,8 +254,8 @@ class BlockRegistry(Registry[WikiBlockItemController]):
         super().__init__(guild_id, WikiBlockItemController(guild_id))
 
     async def blocked_list(self) -> list[str]:
-        blocks = await self.controller.get_all_blocks()
-        return [block.wiki_name for block in blocks]
+        blocks = await self.controller.get_all_blocks() # type: ignore
+        return [block.wiki_name for block in blocks] # type: ignore
 
     async def list(self) -> Result[dict[str, BaseFamily]]:
         result = Result[dict[str, BaseFamily]](data={}, status=ResultStatus.EXCEPTION, message="")
@@ -265,13 +266,11 @@ class BlockRegistry(Registry[WikiBlockItemController]):
             filtered_static = {name: family for name, family in self.static_families.items() if name in blocked}
             result.data = filtered_static
             result.status = ResultStatus.DONE
-
-            if len(result.data) == 0:
+            wiki_count: int= len(result.data)
+            if  wiki_count == 0:
                 result.message = "No blocked wikis found."
-            elif len(result.data) == 1:
-                result.message = "1 blocked wiki found."
             else:
-                result.message = f"{len(result.data)} blocked wikis found."
+                result.message = f"{wiki_count} blocked wiki{"s" if wiki_count > 1  else ""} found."
 
         except Exception:
             result.data = {}
@@ -293,7 +292,7 @@ class BlockRegistry(Registry[WikiBlockItemController]):
                     result.status = ResultStatus.NOT_FOUND
                     result.message = f"Wiki '{name}' is not blocked."
                 else:
-                    await self.controller.delete_block_by_name(name)
+                    await self.controller.delete_block_by_name(name) # type: ignore
                     result.status = ResultStatus.DONE
                     result.message = f"Wiki '{name}' has been unblocked successfully."
 
@@ -323,7 +322,7 @@ class BlockRegistry(Registry[WikiBlockItemController]):
                     result.status = ResultStatus.ALREADY_EXISTS
                     result.message = f"Wiki '{name}' is already blocked."
                 else:
-                    await self.controller.insert_blocked_wiki(name)
+                    await self.controller.insert_blocked_wiki(name) # type: ignore
                     result.status = ResultStatus.DONE
                     result.message = f"Wiki '{name}' has been blocked successfully."
 
@@ -340,6 +339,7 @@ class BlockRegistry(Registry[WikiBlockItemController]):
 
 class WikiRegistry(Registry[WikiController]):
     def __init__(self, guild_id: int):
+        
         super().__init__(guild_id, controller=WikiController(guild_id))
 
     async def delete(self, name: str) -> Result[None]:
@@ -350,7 +350,7 @@ class WikiRegistry(Registry[WikiController]):
             guild_families = await self._get_guild_families()
 
             if name in guild_families:
-                delete_result = await self.controller.delete_wiki_by_name(name)
+                delete_result = await self.controller.delete_wiki_by_name(name) # type: ignore
                 if delete_result:
                     result.status = ResultStatus.DONE
                     result.message = f"Wiki '{name}' has been deleted."
@@ -377,11 +377,11 @@ class WikiRegistry(Registry[WikiController]):
     ) -> Result[bool]:
         result = Result[bool](data=False, status=ResultStatus.EXCEPTION, message="")
         try:
-            family_cls = generate_wiki_family("en", url, name, article_path, script_path)
+            family_cls = wiki_factory("en", url, name, article_path, script_path)
             is_valid = await is_wiki("en", family_cls())  # type: ignore
 
             if is_valid.data and is_valid.status == ResultStatus.DONE:
-                is_inserted = await self.controller.insert_wiki(
+                is_inserted = await self.controller.insert_wiki( # type: ignore
                     name=name,
                     url=url,
                     article_path=article_path,
@@ -412,20 +412,20 @@ class WikiRegistry(Registry[WikiController]):
         return result
 
     async def guild_name_list(self) -> list[str]:
-        wikis = await self.controller.get_wikis_by_guild_id()
-        return [wiki.wiki_name for wiki in wikis]
+        wikis = await self.controller.get_wikis_by_guild_id() # type: ignore
+        return [wiki.wiki_name for wiki in wikis] # type: ignore
 
     async def _get_guild_families(self) -> dict[str, BaseFamily]:
-        wikis = await self.controller.get_wikis_by_guild_id()
+        wikis = await self.controller.get_wikis_by_guild_id() # type: ignore
         return {
-            wiki.wiki_name: generate_wiki_family(
+            wiki.wiki_name: wiki_factory( # type: ignore
                 code="en",
-                site=wiki.wiki_url,
-                fname=wiki.wiki_name,
-                article_path=wiki.wiki_article_path,
-                script_path=wiki.wiki_script_path,
+                site=wiki.wiki_url, # type: ignore
+                name=wiki.wiki_name, # type: ignore
+                article_path=wiki.wiki_article_path, # type: ignore
+                script_path=wiki.wiki_script_path, # type: ignore
             )()  # type: ignore
-            for wiki in wikis
+            for wiki in wikis # type: ignore
         }
 
     async def _blocked_name_list(self) -> list[str]:
