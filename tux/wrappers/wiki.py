@@ -7,9 +7,8 @@ import httpx
 import pywikibot  # type: ignore
 from loguru import logger
 from pywikibot import Family, Site, config  # type: ignore
-from pywikibot.family import Family as BaseFamily  # type: ignore
-
-from tux.database.controllers.wiki import WikiBlockItemController, WikiController  # type: ignore
+from pywikibot.family import Family as BaseFamily # type: ignore
+from tux.database.controllers.wiki import WikiBlockItemController, WikiController   # type: ignore
 
 pywikibot.config.retry_attempts = 0  # type: ignore
 pywikibot.config.retry_wait = 0  # type: ignore
@@ -87,25 +86,25 @@ def wiki_factory(
         def scriptpath(self, code: Any):
             return script_path or "/w"
 
-        def apipath(self, code: Any) -> str:
+        def apipath(self, code: Any) -> str:   
             if script_path:
-                return f"{script_path.rstrip('/')}/api.php"
+                return f"{script_path.rstrip('/')}/api.php"   # type: ignore
             return "/w/api.php"  # Default API path for MediaWiki
 
     Family.__name__ = f"{name.capitalize()}Family"
     return Family  
 
 
-def load_family(name: str) -> Result[Family | None]: 
+def load_family(name: str) -> Result[Family | None]: # type: ignore
     """
     Attempt to load a MediaWiki family by name.
     """
     try:
-        family = Family.load(name)  
-        return Result(data=family, status=ResultStatus.DONE, message=f"Family '{name}' loaded successfully.")
+        family = Family.load(name)  # type: ignore
+        return Result(data=family, status=ResultStatus.DONE, message=f"Family '{name}' loaded successfully.")   # type: ignore
     except Exception as e:
         logger.error(f"Failed to load family '{name}': {e}")
-        return Result(data=None, status=ResultStatus.EXCEPTION, message=f"Failed to load family '{name}'.")
+        return Result(data=None, status=ResultStatus.EXCEPTION, message=f"Failed to load family '{name}'.")   # type: ignore
 
 
 def get_preregistered_wikis() -> Result[list[BaseFamily]]:  # type: ignore
@@ -116,7 +115,7 @@ def get_preregistered_wikis() -> Result[list[BaseFamily]]:  # type: ignore
         families = []
         for name in config.family_files:  # type: ignore
             family_result = load_family(name)  # type: ignore
-            if family_result.status == ResultStatus.DONE and family_result.data:
+            if family_result.status == ResultStatus.DONE and family_result.data:   # type: ignore
                 families.append(family_result.data)  # type: ignore
         return Result(
             data=families,  # type: ignore
@@ -180,7 +179,7 @@ async def is_wiki(code: str, family: BaseFamily) -> Result[bool]:
         return Result(False, ResultStatus.NOT_FOUND, msg)
 
     site = Site(code, family)
-    api_url = f"{site.protocol()}://{site.hostname()}{site.apipath()}"  # type: ignore
+    api_url = f"{site.protocol()}://{site.hostname()}{site.apipath()}"   # type: ignore
     params = {"action": "query", "meta": "siteinfo", "format": "json"}
 
     try:
@@ -243,9 +242,9 @@ class Registry(Generic[D]):
         self.guild_id = guild_id
         self.controller = controller
         self.static_families: dict[str, BaseFamily] = {
-            f.name: f  # type: ignore
+            f.name: f 
             for f in get_preregistered_wikis().data
-            if f is not None and f.name is not None  # type: ignore
+            if f and f.name is not None  
         }
 
 
@@ -254,8 +253,8 @@ class BlockRegistry(Registry[WikiBlockItemController]):
         super().__init__(guild_id, WikiBlockItemController(guild_id))
 
     async def blocked_list(self) -> list[str]:
-        blocks = await self.controller.get_all_blocks() # type: ignore
-        return [block.wiki_name for block in blocks] # type: ignore
+        blocks = await self.controller.get_all_blocks()
+        return [block.wiki_name for block in blocks] 
 
     async def list(self) -> Result[dict[str, BaseFamily]]:
         result = Result[dict[str, BaseFamily]](data={}, status=ResultStatus.EXCEPTION, message="")
@@ -292,7 +291,7 @@ class BlockRegistry(Registry[WikiBlockItemController]):
                     result.status = ResultStatus.NOT_FOUND
                     result.message = f"Wiki '{name}' is not blocked."
                 else:
-                    await self.controller.delete_block_by_name(name) # type: ignore
+                    await self.controller.delete_block_by_name(name) 
                     result.status = ResultStatus.DONE
                     result.message = f"Wiki '{name}' has been unblocked successfully."
 
@@ -322,7 +321,7 @@ class BlockRegistry(Registry[WikiBlockItemController]):
                     result.status = ResultStatus.ALREADY_EXISTS
                     result.message = f"Wiki '{name}' is already blocked."
                 else:
-                    await self.controller.insert_blocked_wiki(name) # type: ignore
+                    await self.controller.insert_blocked_wiki(name)
                     result.status = ResultStatus.DONE
                     result.message = f"Wiki '{name}' has been blocked successfully."
 
@@ -341,7 +340,7 @@ class WikiRegistry(Registry[WikiController]):
     def __init__(self, guild_id: int):
         
         super().__init__(guild_id, controller=WikiController(guild_id))
-
+    # async def info() -> 
     async def delete(self, name: str) -> Result[None]:
         result = Result[None](data=None, status=ResultStatus.DONE, message="")
         name = name.lower()
@@ -350,7 +349,7 @@ class WikiRegistry(Registry[WikiController]):
             guild_families = await self._get_guild_families()
 
             if name in guild_families:
-                delete_result = await self.controller.delete_wiki_by_name(name) # type: ignore
+                delete_result = await self.controller.delete_wiki_by_name(name) 
                 if delete_result:
                     result.status = ResultStatus.DONE
                     result.message = f"Wiki '{name}' has been deleted."
@@ -378,10 +377,13 @@ class WikiRegistry(Registry[WikiController]):
         result = Result[bool](data=False, status=ResultStatus.EXCEPTION, message="")
         try:
             family_cls = wiki_factory("en", url, name, article_path, script_path)
-            is_valid = await is_wiki("en", family_cls())  # type: ignore
+            is_valid = await is_wiki(
+                "en", 
+                family_cls() # type: ignore
+            ) 
 
             if is_valid.data and is_valid.status == ResultStatus.DONE:
-                is_inserted = await self.controller.insert_wiki( # type: ignore
+                is_inserted = await self.controller.insert_wiki( 
                     name=name,
                     url=url,
                     article_path=article_path,
@@ -412,21 +414,20 @@ class WikiRegistry(Registry[WikiController]):
         return result
 
     async def guild_name_list(self) -> list[str]:
-        wikis = await self.controller.get_wikis_by_guild_id() # type: ignore
-        return [wiki.wiki_name for wiki in wikis] # type: ignore
+        wikis = await self.controller.get_wikis_by_guild_id() 
+        return [wiki.wiki_name for wiki in wikis]
 
     async def _get_guild_families(self) -> dict[str, BaseFamily]:
-        wikis = await self.controller.get_wikis_by_guild_id() # type: ignore
+        wikis = await self.controller.get_wikis_by_guild_id()
         return {
-            wiki.wiki_name: wiki_factory( # type: ignore
+            wiki.wiki_name: wiki_factory(  # type: ignore
                 code="en",
-                site=wiki.wiki_url, # type: ignore
-                name=wiki.wiki_name, # type: ignore
-                article_path=wiki.wiki_article_path, # type: ignore
-                script_path=wiki.wiki_script_path, # type: ignore
-            )()  # type: ignore
-            for wiki in wikis # type: ignore
-        }
+                site=wiki.wiki_url, 
+                name=wiki.wiki_name, 
+                article_path=wiki.wiki_article_path,
+                script_path=wiki.wiki_script_path, 
+            )()  
+            for wiki in wikis }
 
     async def _blocked_name_list(self) -> list[str]:
         block_registry = BlockRegistry(self.guild_id)

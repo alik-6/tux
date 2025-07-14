@@ -1,7 +1,7 @@
 from typing import Any, cast
 
 import discord
-from discord import app_commands
+from discord import Guild, app_commands
 from discord.ext import commands
 from loguru import logger
 
@@ -9,11 +9,20 @@ from tux.bot import Tux
 from tux.ui.embeds import EmbedCreator
 from tux.utils import checks
 from tux.utils.functions import generate_usage
+from tux.utils.decorators import defer, loader
 from tux.wrappers.wiki import BlockRegistry, Result, ResultStatus, WikiRegistry
 from tux.wrappers.wiki import query_wiki as pwb_query_wiki
 
 
 class Wiki(commands.Cog):
+    """
+    A Cog for handling wiki-related commands within a Discord server.
+
+    Parameters
+    ----------
+    bot : Tux
+        The bot instance that this cog is attached to.
+    """
     def __init__(self, bot: Tux) -> None:
         self.bot = bot
         self.wiki.usage = generate_usage(self.wiki)
@@ -26,11 +35,29 @@ class Wiki(commands.Cog):
         self.list_blocks.usage = generate_usage(self.list_blocks)
 
     async def cog_load(self) -> None:
+        """
+        Called when the cog is loaded.
+        """
         pass
 
     async def autocomplete_wiki_name(
         self, interaction: discord.Interaction, current: str
     ) -> list[app_commands.Choice[str]]:
+        """
+        Autocomplete handler for registered wiki names.
+
+        Parameters
+        ----------
+        interaction : discord.Interaction
+            The interaction that triggered the autocomplete.
+        current : str
+            The current input from the user.
+
+        Returns
+        -------
+        list of app_commands.Choice[str]
+            List of autocomplete choices.
+        """
         registry = WikiRegistry(cast(int, interaction.guild_id))  
         result = await registry.list()
         result = Result(list(result.data.keys()), status=result.status, message=result.message)
@@ -39,6 +66,21 @@ class Wiki(commands.Cog):
     async def autocomplete_static_wiki_name(
         self, interaction: discord.Interaction, current: str
     ) -> list[app_commands.Choice[str]]:
+        """
+        Autocomplete handler for static wiki names.
+
+        Parameters
+        ----------
+        interaction : discord.Interaction
+            The interaction object.
+        current : str
+            The user's current input.
+
+        Returns
+        -------
+        list of app_commands.Choice[str]
+            Matching choices.
+        """
         registry = WikiRegistry(cast(int,interaction.guild_id))
         result = Result(list(registry.static_families), status=ResultStatus.DONE, message="")
         return await self.autocomplete_from_result(result=result, current=current)
@@ -46,6 +88,21 @@ class Wiki(commands.Cog):
     async def autocomplete_dynamic_wiki_name(
         self, interaction: discord.Interaction, current: str
     ) -> list[app_commands.Choice[str]]:
+        """
+        Autocomplete handler for dynamically added wiki names.
+
+        Parameters
+        ----------
+        interaction : discord.Interaction
+            The interaction object.
+        current : str
+            The user's current input.
+
+        Returns
+        -------
+        list of app_commands.Choice[str]
+            Matching choices.
+        """
         registry = WikiRegistry(cast(int,interaction.guild_id)) 
         result = Result(await registry.guild_name_list(), status=ResultStatus.DONE, message="")
         return await self.autocomplete_from_result(result=result, current=current)
@@ -53,12 +110,42 @@ class Wiki(commands.Cog):
     async def autocomplete_blocked_wiki_name(
         self, interaction: discord.Interaction, current: str
     ) -> list[app_commands.Choice[str]]:
+        """
+        Autocomplete handler for blocked wiki names.
+
+        Parameters
+        ----------
+        interaction : discord.Interaction
+            The interaction object.
+        current : str
+            The user's current input.
+
+        Returns
+        -------
+        list of app_commands.Choice[str]
+            Matching choices.
+        """
         registry = BlockRegistry(cast(int, interaction.guild_id))
         result = await registry.list()
         result = Result(list(result.data.keys()), status=result.status, message=result.message)
         return await self.autocomplete_from_result(result=result, current=current)
 
     async def autocomplete_from_result(self, result: Result[list[str]], current: str) -> list[app_commands.Choice[str]]:
+        """
+        Converts a Result object into a list of autocomplete choices.
+
+        Parameters
+        ----------
+        result : Result[list[str]]
+            The result object containing possible choices.
+        current : str
+            The current input to match against.
+
+        Returns
+        -------
+        list of app_commands.Choice[str]
+            Matching choices.
+        """
         if result.status == ResultStatus.EXCEPTION:
             return []
 
@@ -73,6 +160,18 @@ class Wiki(commands.Cog):
         return []
 
     async def safe_send(self, ctx: commands.Context[Tux], *args: Any, **kwargs: Any) -> None:
+        """
+        Safely sends a message whether in interaction or traditional command context.
+
+        Parameters
+        ----------
+        ctx : commands.Context[Tux]
+            The command context.
+        *args : Any
+            Positional arguments to pass to the send method.
+        **kwargs : Any
+            Keyword arguments to pass to the send method.
+        """
         if ctx.interaction:
             done = ctx.interaction.response.is_done()
             logger.debug(f"[safe_send] interaction.response.is_done() = {done}")
@@ -95,6 +194,21 @@ class Wiki(commands.Cog):
         result: Result[Any],
         ctx: commands.Context[Tux],
     ) -> discord.Embed:
+        """
+        Create a styled embed message based on the result status.
+
+        Parameters
+        ----------
+        result : Result[Any]
+            Result object to extract message and status.
+        ctx : commands.Context[Tux]
+            Context for user information.
+
+        Returns
+        -------
+        discord.Embed
+            An embed appropriate for the result.
+        """
         embed_type = EmbedCreator.INFO
         description = result.message or ""
 
@@ -122,16 +236,23 @@ class Wiki(commands.Cog):
             description=description,
         )
 
+
+
+
     @commands.hybrid_group(
         name="wiki",
         aliases=["wk"],
     )
     @commands.guild_only()
+    @loader()
+    @defer()
     async def wiki(self, ctx: commands.Context[Tux]) -> None:
         """Wiki-related commands."""
         await ctx.send_help("wiki")
-
+    
     @wiki.command(name="list")
+    @loader()
+    @defer()
     async def list_wikis(self, ctx: commands.Context[Tux]) -> None:
         """List all registered wikis."""
         if ctx.interaction:
@@ -155,14 +276,11 @@ class Wiki(commands.Cog):
 
     @wiki.command(name="search")
     @app_commands.autocomplete(name=autocomplete_wiki_name)
+    @loader()
+    @defer()
     async def search_wiki(self, ctx: commands.Context[Tux], name: str, *, query: str) -> None:
         """Search a registered wiki."""
-        if ctx.interaction:
-            await ctx.interaction.response.defer()
-        else:
-            await ctx.message.add_reaction('🐍')
-
-        registry = WikiRegistry(ctx.guild.id)  # type: ignore
+        registry = WikiRegistry(cast(Guild,ctx.guild).id)  
         result = await registry.get(name)
 
         if result.status == ResultStatus.DONE and result.data is not None:
@@ -179,11 +297,17 @@ class Wiki(commands.Cog):
         else:
             embed = self.create_embed(result, ctx)
             await self.safe_send(ctx, embed=embed)
-        if (not ctx.interaction): await ctx.message.remove_reaction('🐍', ctx.guild.me)
         
-
+    @wiki.command(name="info")
+    @loader()
+    @defer()
+    async def info_wiki(self, ctx: commands.Context[Tux]) -> None:
+        pass
+    
     @wiki.command(name="add")
     @checks.has_pl(2)
+    @loader()
+    @defer()
     async def add_wiki(
         self,
         ctx: commands.Context[Tux],
@@ -193,9 +317,6 @@ class Wiki(commands.Cog):
         script_path: str | None = None,
     ) -> None:
         """Register a new wiki."""
-        if ctx.interaction:
-            await ctx.interaction.response.defer()
-
         registry = WikiRegistry(ctx.guild.id)  # type: ignore
         result = await registry.add(name, url, article_path, script_path)
         embed = self.create_embed(result, ctx)
@@ -203,11 +324,11 @@ class Wiki(commands.Cog):
 
     @wiki.command(name="delete")
     @checks.has_pl(2)
+    @loader()
+    @defer()
     @app_commands.autocomplete(name=autocomplete_dynamic_wiki_name)
     async def delete_wiki(self, ctx: commands.Context[Tux], name: str) -> None:
         """Delete a registered wiki."""
-        if ctx.interaction:
-            await ctx.interaction.response.defer()
 
         registry = WikiRegistry(guild_id=ctx.guild.id)  # type: ignore
         result = await registry.delete(name)
@@ -216,11 +337,10 @@ class Wiki(commands.Cog):
 
     @wiki.command(name="add_block")
     @app_commands.autocomplete(name=autocomplete_static_wiki_name)
+    @loader()
+    @defer()
     async def add_block(self, ctx: commands.Context[Tux], name: str):
         """Block's a wiki."""
-        if ctx.interaction:
-            await ctx.interaction.response.defer()
-
         registry = BlockRegistry(ctx.guild.id)  # type: ignore
         result = await registry.block(name)
         embed = self.create_embed(result, ctx)
@@ -228,17 +348,18 @@ class Wiki(commands.Cog):
 
     @wiki.command(name="remove_block")
     @app_commands.autocomplete(name=autocomplete_blocked_wiki_name)
+    @loader()
+    @defer()
     async def remove_block(self, ctx: commands.Context[Tux], name: str):
         """Unblock's a wiki."""
-        if ctx.interaction:
-            await ctx.interaction.response.defer()
-
         registry = BlockRegistry(ctx.guild.id)  # type: ignore
         result = await registry.unblock(name)
         embed = self.create_embed(result, ctx)
         await self.safe_send(ctx, embed=embed)
 
     @wiki.command(name="list_blocks")
+    @loader()
+    @defer()
     async def list_blocks(self, ctx: commands.Context[Tux]) -> None:
         """List all blocked wikis."""
         registry = BlockRegistry(ctx.guild.id)  # type: ignore
